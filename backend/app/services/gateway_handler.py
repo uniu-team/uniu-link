@@ -566,7 +566,12 @@ async def handle_gateway_request(
                 request_body, api_type, trace_id, api_key_hash, start_time, log_context, api_key_id
             ),
             media_type="text/event-stream",
-            headers={"x-request-id": trace_id, "x-trace-id": trace_id},
+            headers={
+                "x-request-id": trace_id,
+                "x-trace-id": trace_id,
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     request_body = await plugin_engine.execute_hook(

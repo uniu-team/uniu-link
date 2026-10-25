@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 import httpx
 
@@ -396,6 +397,62 @@ async def reset_quota(instance, name: str | None = None) -> dict[str, Any]:
     return await _json(instance, "POST", "/reset-quota", json_body=body)
 
 
+_CALLBACK_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def parse_oauth_callback_input(raw: str) -> dict[str, str]:
+    """解析粘贴的回调内容，归一为 CPA 回调接口可用的字段。
+
+    支持三种形式：
+
+    - 浏览器地址栏中的完整回调 URL：提取 query（必要时含 fragment）里的
+      ``code`` / ``state`` / ``error``；
+    - ``code#state`` 形式的授权码：按 ``#`` 拆分（Claude 授权页展示的就是这种）；
+    - 纯授权码：只返回 ``code``，由调用方补充当前会话的 ``state``。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return {}
+
+    if _CALLBACK_URL_RE.match(text):
+        parsed = urlsplit(text)
+        params = parse_qs(parsed.query, keep_blank_values=False)
+        # Claude 的授权码可能带 ``#state``，浏览器有时会把后半段当作 fragment，
+        # 因此 fragment 也按 query 解析，用于补齐 state。
+        for key, value in parse_qsl(parsed.fragment, keep_blank_values=False):
+            params.setdefault(key, []).append(value)
+
+        result: dict[str, str] = {"redirect_url": text}
+        code = ((params.get("code") or [""])[0] or "").strip()
+        state = ((params.get("state") or [""])[0] or "").strip()
+        if "#" in code:
+            code, _, implied_state = code.partition("#")
+            code = code.strip()
+            if not state and implied_state.strip():
+                state = implied_state.strip()
+        if code:
+            result["code"] = code
+        if state:
+            result["state"] = state
+        for key in ("error", "error_description"):
+            values = params.get(key) or []
+            if values and (values[0] or "").strip():
+                result["error"] = values[0].strip()
+                break
+        return result
+
+    if "#" in text:
+        code, _, state = text.partition("#")
+        result = {}
+        if code.strip():
+            result["code"] = code.strip()
+        if state.strip():
+            result["state"] = state.strip()
+        return result
+
+    return {"code": text}
+
+
 async def start_oauth(instance, provider: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     path = OAUTH_PROVIDERS.get((provider or "").strip().lower())
     if not path:
@@ -406,7 +463,47 @@ async def start_oauth(instance, provider: str, params: dict[str, Any] | None = N
     # 其它账号类型的处理器不读该参数，多传无副作用。
     query = dict(params or {})
     query["is_webui"] = "true"
+    try:
+        return await _json(instance, "GET", f"/{path}", params=query)
+    except CpaManagementError as exc:
+        # 转发器端口被占用等情况下 CPA 起不来本地回调。远程/Docker 部署本来
+        # 就走「粘贴回调」(submit_oauth_callback) 完成登录，去掉 is_webui 重试
+        # 一次，保证仍能拿到授权链接。
+        if "callback server" not in str(exc):
+            raise
+        logger.warning(f"CLIProxyAPI 无法启动本地回调转发器，改为无转发器模式重试：{exc}")
+    query.pop("is_webui", None)
     return await _json(instance, "GET", f"/{path}", params=query)
+
+
+async def submit_oauth_callback(
+    instance,
+    provider: str,
+    callback: str,
+    state: str = "",
+) -> dict[str, Any]:
+    """把粘贴的回调 URL / 授权码提交给 CPA，完成 OAuth 登录。
+
+    CPA 的 ``/v0/management/oauth-callback`` 会校验 state 对应的会话仍在等待，
+    再把授权码写成 ``.oauth-<provider>-<state>.oauth`` 回调文件，由等待中的
+    登录协程完成 token 交换。该路径不依赖本地回调转发器，是浏览器无法访问
+    localhost（远程、Docker 部署）时的官方兜底方式。
+    """
+    parsed = parse_oauth_callback_input(callback)
+    body: dict[str, str] = {"provider": (provider or "").strip()}
+    if parsed.get("redirect_url"):
+        body["redirect_url"] = parsed["redirect_url"]
+    # 粘贴内容里的 state 代表授权码所属的会话，优先于前端正在轮询的 state。
+    resolved_state = parsed.get("state") or (state or "").strip()
+    if resolved_state:
+        body["state"] = resolved_state
+    if parsed.get("error"):
+        body["error"] = parsed["error"]
+    elif parsed.get("code"):
+        body["code"] = parsed["code"]
+    if not body.get("code") and not body.get("error"):
+        raise CpaManagementError("未能从粘贴内容中解析出授权码，请粘贴完整的回调 URL 或授权码")
+    return await management_call(instance, "POST", "/oauth-callback", json_body=body)
 
 
 async def poll_oauth_status(instance, state: str) -> dict[str, Any]:

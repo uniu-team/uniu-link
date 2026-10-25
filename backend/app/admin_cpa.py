@@ -52,6 +52,12 @@ class CpaOAuthStartRequest(BaseModel):
     provider: str
 
 
+class CpaOAuthCallbackRequest(BaseModel):
+    provider: str
+    callback: str
+    state: str = ""
+
+
 class CpaAccountImportRequest(BaseModel):
     content: str
     name: str = ""
@@ -484,6 +490,58 @@ async def start_cpa_oauth(
         payload = await cpa_accounts.start_oauth(instance, data.provider)
     except cpa_accounts.CpaManagementError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return success_response(detail_result=payload)
+
+
+def _oauth_callback_error(exc: cpa_accounts.CpaManagementError) -> HTTPException:
+    """把 CPA 的回调提交错误映射成界面可直接展示的提示。"""
+    detail = str(exc)
+    lowered = detail.lower()
+    if "already completed" in lowered:
+        return HTTPException(status_code=400, detail="该登录会话已完成，无需重复提交")
+    if (
+        "unknown or expired state" in lowered
+        or "not pending" in lowered
+        or "waiting for oauth callback" in lowered
+        or "oauth flow timed out" in lowered
+        or "invalid state" in lowered
+    ):
+        return HTTPException(status_code=400, detail="登录会话已失效或已超时，请重新获取授权链接")
+    if "provider does not match" in lowered:
+        return HTTPException(
+            status_code=400, detail="回调内容与当前登录会话不匹配，请重新获取授权链接后再试"
+        )
+    if "code or error is required" in lowered:
+        return HTTPException(
+            status_code=400, detail="未能从粘贴内容中解析出授权码，请粘贴完整的回调 URL 或授权码"
+        )
+    if "未能从粘贴内容中解析出授权码" in detail:
+        return HTTPException(status_code=400, detail=detail)
+    return HTTPException(status_code=502, detail=detail)
+
+
+@cpa_admin_router.post("/oauth/callback")
+async def submit_cpa_oauth_callback(
+    data: CpaOAuthCallbackRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """提交浏览器回调 URL（或授权码），完成 OAuth 登录。
+
+    远程/Docker 部署下浏览器跳转 ``localhost:<端口>`` 无法访问，把地址栏里的
+    完整 URL 粘贴回来即可；CPA 校验 state 后写入回调文件，不依赖回调转发器。
+    """
+    instance = await _instance(db)
+    callback = data.callback.strip()
+    if not callback:
+        raise HTTPException(status_code=400, detail="回调内容不能为空")
+    if len(callback) > 4096:
+        raise HTTPException(status_code=400, detail="回调内容过长")
+    try:
+        payload = await cpa_accounts.submit_oauth_callback(
+            instance, data.provider, callback, data.state
+        )
+    except cpa_accounts.CpaManagementError as exc:
+        raise _oauth_callback_error(exc) from exc
     return success_response(detail_result=payload)
 
 

@@ -216,5 +216,48 @@ class ChannelNamingTests(unittest.TestCase):
         self.assertEqual(cpa_manager.channel_name_for_provider("acme"), "CliProxyAPI-acme")
 
 
+class OAuthCallbackInputTests(unittest.TestCase):
+    def test_parses_full_callback_url(self):
+        raw = "http://localhost:1455/auth/callback?code=abc123&state=st-1"
+        parsed = cpa_accounts.parse_oauth_callback_input(raw)
+        self.assertEqual(parsed["redirect_url"], raw)
+        self.assertEqual(parsed["code"], "abc123")
+        self.assertEqual(parsed["state"], "st-1")
+
+    def test_url_encoded_claude_code_is_split(self):
+        parsed = cpa_accounts.parse_oauth_callback_input(
+            "http://localhost:54545/callback?code=abc%23st-2&state=st-2"
+        )
+        self.assertEqual(parsed["code"], "abc")
+        self.assertEqual(parsed["state"], "st-2")
+
+    def test_fragment_state_fills_missing_query_state(self):
+        parsed = cpa_accounts.parse_oauth_callback_input(
+            "http://localhost:54545/callback?code=abc#state=st-3"
+        )
+        self.assertEqual(parsed["code"], "abc")
+        self.assertEqual(parsed["state"], "st-3")
+
+    def test_error_callback_returns_error_without_code(self):
+        parsed = cpa_accounts.parse_oauth_callback_input(
+            "http://localhost:1455/auth/callback?error=access_denied&error_description=denied"
+        )
+        self.assertEqual(parsed["error"], "access_denied")
+        self.assertNotIn("code", parsed)
+
+    def test_raw_code_with_state_is_split(self):
+        self.assertEqual(
+            cpa_accounts.parse_oauth_callback_input("abc#st-4"),
+            {"code": "abc", "state": "st-4"},
+        )
+
+    def test_raw_code_only_strips_whitespace(self):
+        self.assertEqual(cpa_accounts.parse_oauth_callback_input(" abc "), {"code": "abc"})
+
+    def test_blank_input_returns_empty(self):
+        self.assertEqual(cpa_accounts.parse_oauth_callback_input("   "), {})
+        self.assertEqual(cpa_accounts.parse_oauth_callback_input(None), {})
+
+
 if __name__ == "__main__":
     unittest.main()

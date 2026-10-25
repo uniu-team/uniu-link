@@ -191,6 +191,8 @@ UniuLink 直接托管 CLIProxyAPI（CPA）的安装与进程，管理员只需�
 - 实例在 `install_dir` 下拥有独立的配置、`auths/` 与 `logs/`，监听 `127.0.0.1` 并在 `remote-management.allow-remote: false` 下运行。配置文件按 0600 原子写入，含自动生成的访问密钥与管理密钥（Fernet 加密存于 `cpa_instances`）。CPA 以 `cwd=install_dir` 启动，因此配置里的 `auth-dir` 等路径必须写绝对值。
 - **渠道按账号类型拆分**，名称为 `CliProxyAPI-<账号类型>`（类型取界面标签），`auto_managed = True`、`provider = "cliproxyapi"`、`health_check_mode = "account_pool"`，并用 `cpa_provider` 记录该类型。每个账号类型一个渠道，不再是「一个实例一个渠道」。没有账号的类型不建渠道，账号被清空的类型会移除其渠道，历史遗留的实例级渠道（`cpa_provider` 为空）一并清理。管理接口拒绝手动创建、编辑和删除这类渠道。
 - 「账号管理」页面通过 CPA 管理接口（`/v0/management/*`）管理账号池：启停账号、刷新 Token、重置冷却、导入/导出凭据，以及 OAuth 向导登录。进程状态、账号池健康与渠道健康都由后端实时读取，不写入实例表以外的缓存。
+- **OAuth 登录的回调地址由 CPA 编译期固定为 loopback**（Claude `localhost:54545`、Codex `localhost:1455`、Antigravity `localhost:51121`、Devin `127.0.0.1:<实例端口>`），无法改成公网域名。`start_oauth()` 带 `is_webui=true` 只让 CPA 在实例主机启动回调转发器并 302 回 `127.0.0.1:<实例端口>`，因此浏览器与实例同机时才能自动完成；线上、Docker 部署（Compose 只暴露 8000）必须走「粘贴回调」：把浏览器地址栏里的完整回调 URL（或授权码）提交给 `POST /api/admin/cpa/oauth/callback`，由 `submit_oauth_callback()` 转给 CPA `POST /v0/management/oauth-callback`，CPA 校验 state 后写入 `.oauth-<provider>-<state>.oauth` 回调文件完成登录，不依赖转发器。粘贴内容里的 state 优先于前端轮询的 state；纯授权码（含 `code#state`）用前端 state 兜底。该 CPA 路由不做 management 鉴权、仅检查管理可用性，依赖实例只监听 `127.0.0.1`，不要公网暴露。
+- `start_oauth()` 在 CPA 报 `callback server`（转发器端口被占用等）时自动去掉 `is_webui` 重试一次，保证仍能拿到授权链接走粘贴流程；不要在错误提示里承诺本地自动回调一定可用。
 - 「账号管理」页面的**「额度」列**展示每个账号的套餐、各时间窗剩余百分比与重置时间，数据来自配额插件（见下节）。插件未就绪时该列显示为空，页面给出「安装配额插件」入口。
 - 应用启动时 `reconcile_instances()` 接管仍存活的实例进程、按需拉起 `auto_start` 实例并同步托管渠道；关闭时 `shutdown_reapers()` 结束回收与后台任务。`cpa_instances` 中的 `pid`、`status` 只是快照，判定运行状态以实际进程和 `/healthz` 为准。
 
