@@ -38,7 +38,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/uniu-network/uniu-link:latest
+    image: ghcr.io/uniu-team/uniu-link:latest
     container_name: uniulink
     environment:
       POSTGRES_HOST: postgres
