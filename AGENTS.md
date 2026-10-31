@@ -19,7 +19,7 @@ UniuLink 是一个 AI 模型聚合与分发网关，包含渠道管理、公开�
 | 持久化 | PostgreSQL；SQLAlchemy 2 异步会话、asyncpg、Alembic |
 | 运行时状态 | Redis：API Key 缓存、限流、管理鉴权 nonce、健康状态缓存、熔断状态 |
 | 前端 | Vue 3、TypeScript、Vite 5、Vue Router、Pinia、Axios |
-| UI | Fluent Web Components 2.6.1 的 Vue 封装、Tailwind CSS 3；仪表盘实际使用 ApexCharts |
+| UI | Vuetify 3（MDUI 2 / Material Design 2 经典风格）、Tailwind CSS 3；仪表盘实际使用 ApexCharts |
 | 部署 | Docker 多阶段构建；镜像使用 Node 20、Python 3.11，Compose 配置 PostgreSQL 16 和 Redis 7 |
 | 测试 | 后端标准库 `unittest`；前端 Playwright |
 
@@ -49,7 +49,7 @@ README 提到的响应缓存已被历史迁移移除，当前没有网关响应�
 | `backend/app/plugins/` | 插件协议、动态加载与内置请求日志插件 |
 | `frontend/src/api/`、`frontend/src/utils/authFetch.ts` | 管理接口封装（含 `cpa.ts` 的 CLIProxyAPI 实例、账号与额度接口）、Axios HMAC 签名、流式 fetch 签名 |
 | `frontend/src/views/` | 仪表盘、渠道、账号、模型、密钥、日志、插件、系统配置、演练场及登录页 |
-| `frontend/src/components/ui/`、`frontend/src/composables/` | Fluent 控件封装、反馈消息、主题、表单、弹窗栈与草稿保护 |
+| `frontend/src/components/ui/`、`frontend/src/composables/` | Vuetify 控件封装、反馈消息、主题（MD2 经典蓝默认/前端色彩切换）、表单、弹窗栈与草稿保护；`frontend/src/plugins/vuetify.ts` 配置 MD2 风格默认值与明暗主题 |
 | `frontend/src/utils/modelIdentity.ts`、`ModelIcon.vue`、`ModelLabel.vue` | 本地模型品牌图标、名称识别、手动配置优先级与未知模型回退；组件位于 `frontend/src/components/` |
 | `frontend/src/router/index.ts`、`frontend/src/components/Layout.vue` | 页面路由、鉴权/离开守卫与导航 |
 | `backend/tests/`、`frontend/tests/admin.spec.ts` | 后端探测单测、管理后台浏览器回归测试 |
@@ -154,13 +154,13 @@ APP_ENV=development .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --
 
 - 页面使用 Vue SFC 的 `<script setup lang="ts">`、Composition API 和 `@/` 别名；沿用现有两空格缩进、单引号及通常省略分号的风格，避免无关格式化。
 - 普通管理请求放在 `src/api/` 并复用 `client.ts`；Playground 的 SSE 使用 `authFetch()` 与流读取。不要在页面另外实现签名或混用响应包装。
-- 优先复用 `UiButton`、`UiInput`、`UiSelect`、`UiCheckbox`、`UiModal`、`UiDataTable` 等封装，以及 `PageHeader`、`ListState`。这些封装承担属性同步、类型转换、禁用状态和无障碍语义。
-- Fluent 在 `src/fluent.ts` 注册，Vite 配置将 `fluent-*` 识别为自定义元素。对 Web Components 的 `value`、`checked` 等使用现有 `.prop` 绑定，保留数字/布尔值的请求类型。
+- 优先复用 `UiButton`、`UiInput`、`UiSelect`、`UiCheckbox`、`UiModal`、`UiDataTable` 等封装，以及 `PageHeader`、`ListState`。这些封装基于 Vuetify 3 原生组件（`v-btn`, `v-text-field`, `v-select`, `v-checkbox`, `v-dialog`, `v-list` 等）实现，承担属性同步、类型转换、禁用状态和无障碍语义；`UiDataTable` 自绘紧凑表格并保留横向滚动与 `.ui-table-container` 结构。
+- 前端全面基于 Vuetify 3（MDUI 2 / Material Design 2 经典规范）构建，`src/plugins/vuetify.ts` 用 `defaults` 统一 `variant="outlined"`、`density="comfortable"`、经典圆角与 elevation，避免逐组件覆盖样式。
 - `UiSelect` 包含空选项及异步选项同步处理，`UiModal` 和 `useDialogStack` 处理嵌套弹窗、Escape、焦点归还和滚动锁。修改这些基础组件时须运行相关浏览器测试，不能以简化代码为由删除兼容逻辑。
 - 表单复用 `useUnsavedForm`，其他草稿用 `useDraftGuard`；离开页面、关闭弹窗、退出登录和提交中状态都要考虑草稿保护。`App.vue` 按 `route.path` 挂载页面，只有 query 改变不应清空草稿。
 - 使用 `useToast` / `useConfirm` / `notify` 提供统一反馈。全局 viewport 已在 `App.vue` 挂载，不在页面重复创建；保持消息跨路由展示、独立计时及暂停行为。
-- 主题通过 `useTheme.ts` 的 Fluent design tokens 与 `styles.css` 的 CSS 变量协同实现。保留跟随系统/浅色/深色、存储不可用回退和 `prefers-reduced-motion` 支持；不要给单个控件随意覆盖整套官方视觉样式。
-- 全局圆角使用 Fluent 的 `controlCornerRadius` / `layerCornerRadius`；徽章使用官方 `neutral` 外观。页面、卡片、表格、菜单和弹窗使用短时淡入/位移，图表动画也遵守减少动态效果设置。移动侧边栏保留 64px 导航栏与 272px 展开宽度。
+- 主题通过 `useTheme.ts` 调用 Vuetify `theme.change()` 切换 `md2Light` / `md2Dark`，并在运行时改写 `primary` 色与一组 `--color-*` / `--sidebar-*` / `--brand-rgb-*` CSS 变量；默认主色为 Material 科技蓝（`#1976D2`），前端支持多种预设与自定义取色器实时切换并持久化存储。保留跟随系统/浅色/深色模式（`html[data-theme]`）及 `prefers-reduced-motion` 支持。
+- 页面、卡片、表格、菜单和弹窗使用短时淡入/位移等流畅动画，图表动画也遵守减少动态效果设置。移动侧边栏保留 64px 导航栏与 272px 展开宽度。
 - 模型图标由 `@lobehub/icons-static-svg` 的静态子集打包，运行时不请求图标 CDN。`ModelConfig.icon` 经迁移 `20261005_0001` 持久化；管理接口创建/更新接受白名单图标 ID，默认 `auto`，`generic` 强制通用图标，局部更新省略 `icon` 时保留原值。新增图标同步后端 `ModelIconName`、前端映射与测试。
 - 手动图标优先于名称识别；自动模式仅在所有上游模型都能识别且品牌一致时推断自定义别名，混合/未知目标使用通用图标。图标不代表协议支持或真实提供商验证，也不参与路由。模型卡片、演练场、密钥模型选择与日志共用此展示规则；日志额外读取模型目录失败时仍可浏览。
 - 渠道与模型支持本地搜索/筛选。渠道与日志表通过复合单元格减少列数；`UiDataTable` 的列 `width` 为最小宽度，窄屏保留横向滚动及键盘访问。

@@ -285,9 +285,14 @@ class PluginUpdate(BaseModel):
     config: Optional[dict] = None
 
 @admin_router.get("/stats")
-async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
+async def get_dashboard_stats(
+    granularity: Literal["hourly", "daily"] = Query("hourly"),
+    db: AsyncSession = Depends(get_db),
+):
     now = datetime.utcnow()
     last_hour = now - timedelta(hours=1)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_start - timedelta(days=1)
 
     total_result = await db.execute(
         select(func.count(RequestLog.id)).where(RequestLog.created_at >= last_hour)
@@ -302,17 +307,89 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     error_count = error_result.scalar() or 0
     error_rate = round(error_count / total_requests * 100, 2) if total_requests > 0 else 0.0
 
+    today_row = (
+        await db.execute(
+            select(
+                func.count(RequestLog.id),
+                func.count(RequestLog.id).filter(RequestLog.status_code >= 400),
+                func.coalesce(func.sum(RequestLog.prompt_tokens), 0),
+                func.coalesce(func.sum(RequestLog.completion_tokens), 0),
+                func.coalesce(func.sum(RequestLog.total_tokens), 0),
+                func.count(func.distinct(RequestLog.from_apikey)).filter(
+                    RequestLog.from_apikey != ""
+                ),
+            ).where(RequestLog.created_at >= today_start)
+        )
+    ).one()
+    (
+        today_requests,
+        today_errors,
+        today_prompt_tokens,
+        today_completion_tokens,
+        today_total_tokens,
+        active_api_keys,
+    ) = today_row
+
+    yesterday_row = (
+        await db.execute(
+            select(
+                func.count(RequestLog.id),
+                func.coalesce(func.sum(RequestLog.total_tokens), 0),
+            ).where(
+                and_(
+                    RequestLog.created_at >= yesterday_start,
+                    RequestLog.created_at < today_start,
+                )
+            )
+        )
+    ).one()
+    yesterday_requests, yesterday_total_tokens = yesterday_row
+
+    def growth(current: int, previous: int) -> float:
+        current = int(current or 0)
+        previous = int(previous or 0)
+        if previous == 0:
+            return 100.0 if current > 0 else 0.0
+        return round((current - previous) / previous * 100, 2)
+
+    today_requests = int(today_requests or 0)
+    today_errors = int(today_errors or 0)
+    requests_growth = growth(today_requests, yesterday_requests)
+    tokens_growth = growth(int(today_total_tokens or 0), int(yesterday_total_tokens or 0))
+    today_error_rate = (
+        round(today_errors / today_requests * 100, 2) if today_requests > 0 else 0.0
+    )
+
     channel_result = await db.execute(select(Channel))
     channels = channel_result.scalars().all()
     channel_health = []
+    open_circuits = 0
+    half_open_circuits = 0
     for ch in channels:
         health = await get_channel_health_status(ch.id)
         circuit_info = await get_circuit_info(ch.id)
+        circuit_state = circuit_info["circuit_state"]
+        if circuit_state == "open":
+            open_circuits += 1
+        elif circuit_state == "half_open":
+            half_open_circuits += 1
         channel_health.append({
             "id": ch.id, "name": ch.name, "provider": ch.provider,
-            "health_status": health, "circuit_state": circuit_info["circuit_state"],
+            "health_status": health, "circuit_state": circuit_state,
         })
     healthy_channel_count = sum(1 for ch in channel_health if ch["health_status"] == "healthy")
+    unhealthy_channel_count = sum(
+        1 for ch in channel_health if ch["health_status"] not in ("healthy", "unknown")
+    )
+
+    # ---- Channel pool status summary ----
+    channel_pool = {
+        "total": len(channel_health),
+        "healthy": healthy_channel_count,
+        "unhealthy": unhealthy_channel_count,
+        "open_circuits": open_circuits,
+        "half_open_circuits": half_open_circuits,
+    }
 
     token_hour_result = await db.execute(
         select(
@@ -355,12 +432,19 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     hourly_tokens = [
         {
             "time": row.bucket.isoformat() if row.bucket else "",
+            "timestamp": row.bucket.isoformat() if row.bucket else "",
             "request_count": int(row.request_count or 0),
+            "requests_total": int(row.request_count or 0),
             "error_count": int(row.error_count or 0),
+            "requests_failed": int(row.error_count or 0),
             "healthy_channels": int(row.healthy_channels or 0),
+            "active_channels_count": int(row.healthy_channels or 0),
             "prompt_tokens": int(row.prompt_tokens or 0),
+            "tokens_prompt": int(row.prompt_tokens or 0),
             "completion_tokens": int(row.completion_tokens or 0),
+            "tokens_completion": int(row.completion_tokens or 0),
             "total_tokens": int(row.total_tokens or 0),
+            "tokens_total": int(row.total_tokens or 0),
             "cache_tokens": int(row.cache_tokens or 0),
         }
         for row in hourly_result.all()
@@ -392,17 +476,27 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     daily_tokens = [
         {
             "time": row.bucket.isoformat() if row.bucket else "",
+            "timestamp": row.bucket.isoformat() if row.bucket else "",
             "request_count": int(row.request_count or 0),
+            "requests_total": int(row.request_count or 0),
             "error_count": int(row.error_count or 0),
+            "requests_failed": int(row.error_count or 0),
             "healthy_channels": int(row.healthy_channels or 0),
+            "active_channels_count": int(row.healthy_channels or 0),
             "prompt_tokens": int(row.prompt_tokens or 0),
+            "tokens_prompt": int(row.prompt_tokens or 0),
             "completion_tokens": int(row.completion_tokens or 0),
+            "tokens_completion": int(row.completion_tokens or 0),
             "total_tokens": int(row.total_tokens or 0),
+            "tokens_total": int(row.total_tokens or 0),
             "cache_tokens": int(row.cache_tokens or 0),
         }
         for row in daily_result.all()
     ]
 
+    # Active API key count over the last 24h is a true distinct count, not a
+    # truncated Top-N list (the historical limit=10 cap is lifted here).
+    window_24h = now - timedelta(hours=24)
     api_key_result = await db.execute(
         select(
             RequestLog.from_apikey.label("from_apikey"),
@@ -415,13 +509,12 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         )
         .where(
             and_(
-                RequestLog.created_at >= now - timedelta(hours=24),
+                RequestLog.created_at >= window_24h,
                 RequestLog.from_apikey != "",
             )
         )
         .group_by(RequestLog.from_apikey)
         .order_by(func.count(RequestLog.id).desc())
-        .limit(10)
     )
     api_key_stats = [
         {
@@ -435,6 +528,73 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         }
         for row in api_key_result.all()
     ]
+    active_api_keys_24h = len(api_key_stats)
+
+    # ---- Top models distribution (requests + token share) ----
+    model_result = await db.execute(
+        select(
+            RequestLog.model.label("model"),
+            func.count(RequestLog.id).label("request_count"),
+            func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+        )
+        .where(and_(RequestLog.created_at >= window_24h, RequestLog.model != ""))
+        .group_by(RequestLog.model)
+        .order_by(func.count(RequestLog.id).desc())
+        .limit(8)
+    )
+    model_rows = model_result.all()
+    model_request_total = sum(int(r.request_count or 0) for r in model_rows) or 0
+    model_token_total = sum(int(r.total_tokens or 0) for r in model_rows) or 0
+    top_models = [
+        {
+            "model": row.model,
+            "request_count": int(row.request_count or 0),
+            "total_tokens": int(row.total_tokens or 0),
+            "request_share": round(int(row.request_count or 0) / model_request_total * 100, 2)
+            if model_request_total
+            else 0.0,
+            "token_share": round(int(row.total_tokens or 0) / model_token_total * 100, 2)
+            if model_token_total
+            else 0.0,
+        }
+        for row in model_rows
+    ]
+
+    # ---- Top channels load distribution (requests + avg latency) ----
+    channel_load_result = await db.execute(
+        select(
+            RequestLog.selected_channel_id.label("channel_id"),
+            func.coalesce(func.max(RequestLog.selected_channel_name), "").label("channel_name"),
+            func.count(RequestLog.id).label("request_count"),
+            func.count(RequestLog.id).filter(RequestLog.status_code >= 400).label("error_count"),
+            func.coalesce(func.avg(RequestLog.latency_ms), 0).label("avg_latency"),
+        )
+        .where(
+            and_(
+                RequestLog.created_at >= window_24h,
+                RequestLog.selected_channel_id.isnot(None),
+                RequestLog.selected_channel_id.notin_(["", "cache", "inline"]),
+            )
+        )
+        .group_by(RequestLog.selected_channel_id)
+        .order_by(func.count(RequestLog.id).desc())
+        .limit(8)
+    )
+    channel_load_rows = channel_load_result.all()
+    channel_request_total = sum(int(r.request_count or 0) for r in channel_load_rows) or 0
+    top_channels = [
+        {
+            "channel_id": row.channel_id,
+            "channel_name": row.channel_name or row.channel_id,
+            "request_count": int(row.request_count or 0),
+            "error_count": int(row.error_count or 0),
+            "avg_latency_ms": round(float(row.avg_latency or 0), 1),
+            "request_share": round(int(row.request_count or 0) / channel_request_total * 100, 2)
+            if channel_request_total
+            else 0.0,
+        }
+        for row in channel_load_rows
+    ]
 
     return success_response(detail_result={
         "total_requests": total_requests,
@@ -442,6 +602,22 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         "channel_health": channel_health,
         "healthy_channels": healthy_channel_count,
         "total_channels": len(channel_health),
+        "channel_pool": channel_pool,
+        "granularity": granularity,
+        "kpi": {
+            "today_requests": today_requests,
+            "yesterday_requests": int(yesterday_requests or 0),
+            "requests_growth": requests_growth,
+            "today_errors": today_errors,
+            "today_error_rate": today_error_rate,
+            "today_prompt_tokens": int(today_prompt_tokens or 0),
+            "today_completion_tokens": int(today_completion_tokens or 0),
+            "today_total_tokens": int(today_total_tokens or 0),
+            "tokens_growth": tokens_growth,
+            "total_tokens_last_hour": int(total_tokens_hour or 0),
+            "active_api_keys": int(active_api_keys or 0),
+            "active_api_keys_24h": active_api_keys_24h,
+        },
         "token_stats": {
             "prompt_tokens_last_hour": int(prompt_tokens_hour or 0),
             "completion_tokens_last_hour": int(completion_tokens_hour or 0),
@@ -457,6 +633,8 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             "hourly": hourly_tokens,
             "daily": daily_tokens,
         },
+        "top_models": top_models,
+        "top_channels": top_channels,
         "api_key_stats": api_key_stats,
     })
 
@@ -1052,6 +1230,8 @@ async def list_logs(
                 "selected_channel_name": log.selected_channel_name,
                 "upstream_url": log.upstream_url,
                 "latency_ms": log.latency_ms,
+                "first_token_ms": log.first_token_ms,
+                "is_stream": log.is_stream,
                 "status_code": log.status_code,
                 "error_message": log.error_message,
                 "thinking_effort": log.thinking_effort or "none",

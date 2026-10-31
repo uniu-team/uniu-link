@@ -1,104 +1,277 @@
 <template>
-  <div class="min-h-screen bg-background text-foreground">
-    <aside class="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-border bg-card/80 backdrop-blur-xl lg:flex lg:flex-col">
-      <div class="flex h-16 items-center gap-3 border-b border-border px-5">
-        <div class="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-foreground text-background shadow-sm">
-          <Zap class="h-5 w-5" />
-        </div>
-        <div>
-          <p class="text-sm font-semibold tracking-tight">UniuLink</p>
-          <p class="text-xs text-muted-foreground">AI Gateway</p>
-        </div>
-      </div>
+  <a class="skip-link" href="#main">跳转到主要内容</a>
 
-      <nav class="flex-1 space-y-1 overflow-auto p-3 thin-scrollbar">
-        <button
-          v-for="item in menuItems"
-          :key="item.key"
-          class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-all duration-150 hover:bg-accent"
-          :class="activeKey === item.key ? 'bg-foreground text-background shadow-sm hover:bg-foreground' : 'text-muted-foreground hover:text-foreground'"
-          @click="router.push(item.key)"
-        >
-          <component :is="item.icon" class="h-4 w-4" />
-          <span>{{ item.label }}</span>
-        </button>
-      </nav>
-
-      <div class="space-y-2 border-t border-border p-3">
-        <UiButton variant="ghost" block @click="toggleTheme">
-          <Sun v-if="isDark" class="h-4 w-4" />
-          <Moon v-else class="h-4 w-4" />
-          {{ isDark ? '浅色模式' : '深色模式' }}
-        </UiButton>
-        <UiButton variant="ghost" block @click="logout">
-          <LogOut class="h-4 w-4" />
-          退出登录
-        </UiButton>
-      </div>
-    </aside>
-
-    <div class="lg:pl-64">
-      <header class="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur-xl lg:px-8">
-        <div>
-          <h1 class="text-lg font-semibold tracking-tight">{{ route.meta?.title || 'UniuLink' }}</h1>
-        </div>
-        <div class="flex items-center gap-2 lg:hidden">
-          <UiButton variant="ghost" size="icon" @click="toggleTheme">
-            <Sun v-if="isDark" class="h-4 w-4" />
-            <Moon v-else class="h-4 w-4" />
-          </UiButton>
-          <UiButton variant="ghost" size="icon" @click="logout"><LogOut class="h-4 w-4" /></UiButton>
-        </div>
-      </header>
-
-      <main class="mx-auto w-full max-w-7xl p-4 lg:p-8">
-        <slot />
-      </main>
+  <v-navigation-drawer
+    v-model="drawer"
+    :rail="rail && !isNarrow"
+    :permanent="!isNarrow"
+    :temporary="isNarrow"
+    :width="256"
+    :rail-width="72"
+    color="surface"
+    class="app-drawer"
+    aria-label="管理侧边栏"
+  >
+    <div class="drawer-brand" :class="{ 'drawer-brand-rail': rail && !isNarrow }">
+      <span class="brand-mark"><NavIcon name="gateway" :size="26" /></span>
+      <span v-if="!(rail && !isNarrow)" class="drawer-brand-copy">
+        <strong>UniuLink</strong>
+        <span>AI 网关管理后台</span>
+      </span>
     </div>
-  </div>
+
+    <v-divider />
+
+    <v-list
+      id="admin-navigation"
+      class="nav-list"
+      density="comfortable"
+      nav
+      aria-label="管理导航"
+    >
+      <v-list-item
+        v-for="item in navItems"
+        :key="item.path"
+        :to="item.path"
+        :active="selected(item.path)"
+        :aria-current="selected(item.path) ? 'page' : undefined"
+        color="primary"
+        class="nav-item navigation-item"
+        :class="{ 'navigation-item-selected': selected(item.path) }"
+        :title="item.label"
+        @click="navigated"
+      >
+        <template #prepend>
+          <NavIcon :name="item.icon" :size="20" />
+        </template>
+      </v-list-item>
+    </v-list>
+
+    <template #append>
+      <v-divider />
+      <div class="drawer-footer">
+        <v-btn
+          variant="text"
+          block
+          :disabled="signingOut"
+          class="logout-btn"
+          aria-label="退出登录"
+          title="退出登录"
+          @click="logout"
+        >
+          <template #prepend><NavIcon name="logout" :size="18" /></template>
+          <span v-if="!(rail && !isNarrow)">退出登录</span>
+        </v-btn>
+      </div>
+    </template>
+  </v-navigation-drawer>
+
+  <v-app-bar flat density="comfortable" class="app-bar" border="b">
+    <v-app-bar-nav-icon
+      id="sidebar-toggle"
+      :aria-label="railOrDrawerLabel"
+      :title="railOrDrawerLabel"
+      :aria-expanded="isNarrow ? drawer : !rail"
+      aria-controls="admin-navigation"
+      @click="toggleNav"
+    />
+    <v-app-bar-title class="app-bar-title">
+      <span class="app-bar-page">{{ currentTitle || 'UniuLink' }}</span>
+    </v-app-bar-title>
+    <v-spacer />
+    <div class="app-bar-actions">
+      <ThemeToggle compact />
+    </div>
+  </v-app-bar>
+
+  <v-main class="app-main">
+    <div id="main" class="main-content" tabindex="-1"><slot /></div>
+  </v-main>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import {
-  LayoutDashboard,
-  Server,
-  Cpu,
-  FileText,
-  Puzzle,
-  LogOut,
-  Zap,
-  MessageSquareText,
-  KeyRound,
-  Settings,
-  Sun,
-  Moon,
-} from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
-import { useTheme } from '@/composables/useTheme'
-import UiButton from '@/components/ui/UiButton.vue'
+import { approveNextNavigation, confirmUnsavedChanges } from '@/composables/useUnsavedChanges'
+import NavIcon from './NavIcon.vue'
+import ThemeToggle from './ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
-const authStore = useAuthStore()
-const { isDark, toggleTheme } = useTheme()
+const auth = useAuthStore()
+const screen = window.matchMedia('(max-width: 960px)')
+const isNarrow = ref(screen.matches)
+const drawer = ref(!screen.matches)
+const rail = ref(false)
+const signingOut = ref(false)
 
-const activeKey = computed(() => route.path)
+const currentTitle = computed(() => (route.meta.title as string | undefined) || '')
+const railOrDrawerLabel = computed(() =>
+  isNarrow.value
+    ? drawer.value
+      ? '收起侧边栏'
+      : '展开侧边栏'
+    : rail.value
+      ? '展开侧边栏'
+      : '收起侧边栏'
+)
 
-const menuItems = [
-  { label: '仪表盘', key: '/', icon: LayoutDashboard },
-  { label: '渠道管理', key: '/channels', icon: Server },
-  { label: '模型管理', key: '/models', icon: Cpu },
-  { label: '演练场', key: '/playground', icon: MessageSquareText },
-  { label: '请求日志', key: '/logs', icon: FileText },
-  { label: 'API 密钥', key: '/api-keys', icon: KeyRound },
-  { label: '插件管理', key: '/plugins', icon: Puzzle },
-  { label: '系统配置', key: '/config', icon: Settings },
+// 平铺单层无分类侧边栏导航
+const navItems = [
+  { path: '/', label: '仪表盘', icon: 'dashboard' },
+  { path: '/playground', label: '演练场', icon: 'comment' },
+  { path: '/channels', label: '渠道管理', icon: 'server' },
+  { path: '/accounts', label: '账号管理', icon: 'key' },
+  { path: '/models', label: '模型管理', icon: 'model' },
+  { path: '/api-keys', label: 'API 密钥', icon: 'tag' },
+  { path: '/logs', label: '请求日志', icon: 'document' },
+  { path: '/plugins', label: '插件管理', icon: 'plugin' },
+  { path: '/config', label: '系统配置', icon: 'settings' },
 ]
 
-function logout() {
-  authStore.logout()
-  router.push('/login')
+function selected(path: string) {
+  return path === '/'
+    ? route.path === '/'
+    : route.path === path || route.path.startsWith(path + '/')
+}
+
+function navigated() {
+  if (isNarrow.value) drawer.value = false
+}
+
+function toggleNav() {
+  if (isNarrow.value) drawer.value = !drawer.value
+  else rail.value = !rail.value
+}
+
+function resized(event: MediaQueryListEvent) {
+  isNarrow.value = event.matches
+  drawer.value = !event.matches
+  rail.value = false
+}
+
+function escaped(event: KeyboardEvent) {
+  if (event.key === 'Escape' && isNarrow.value && drawer.value) {
+    drawer.value = false
+    document.getElementById('sidebar-toggle')?.focus()
+  }
+}
+
+screen.addEventListener('change', resized)
+window.addEventListener('keydown', escaped)
+
+onBeforeUnmount(() => {
+  screen.removeEventListener('change', resized)
+  window.removeEventListener('keydown', escaped)
+})
+
+async function logout() {
+  if (signingOut.value) return
+  signingOut.value = true
+  try {
+    if (!(await confirmUnsavedChanges())) return
+    approveNextNavigation()
+    auth.logout()
+    await router.push('/login')
+  } finally {
+    signingOut.value = false
+  }
 }
 </script>
+
+<style scoped>
+.app-drawer {
+  border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+.drawer-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 0 20px;
+  min-width: 0;
+}
+.drawer-brand-rail {
+  justify-content: center;
+  padding: 0;
+}
+.brand-mark {
+  display: inline-flex;
+  color: rgb(var(--v-theme-primary));
+  flex-shrink: 0;
+}
+.drawer-brand-copy {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+.drawer-brand-copy strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+.drawer-brand-copy > span {
+  font-size: 11px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  white-space: nowrap;
+}
+.nav-list {
+  padding: 10px 8px;
+}
+.nav-item {
+  min-height: 44px;
+  padding-inline: 14px;
+}
+.nav-item :deep(.v-list-item__prepend) {
+  width: 28px;
+  min-width: 28px;
+  margin-inline-end: 12px;
+}
+.nav-item :deep(.v-list-item-title) {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.drawer-footer {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px 14px;
+}
+.logout-btn {
+  justify-content: flex-start;
+}
+.app-bar-page {
+  font-size: 16px;
+  font-weight: 600;
+}
+.app-bar-actions {
+  display: flex;
+  align-items: center;
+  padding-right: 12px;
+}
+.skip-link {
+  position: fixed;
+  top: -80px;
+  left: 16px;
+  z-index: 20020;
+  padding: 12px 20px;
+  border-radius: 4px;
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+}
+.skip-link:focus {
+  top: 12px;
+}
+.main-content {
+  padding: 24px clamp(16px, 2.4vw, 36px) 48px;
+  width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+@media (max-width: 700px) {
+  .main-content {
+    padding: 16px;
+  }
+}
+</style>

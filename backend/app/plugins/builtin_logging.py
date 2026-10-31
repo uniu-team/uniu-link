@@ -49,6 +49,8 @@ class LoggingPlugin(PluginHook):
                 selected_channel_name=_limit(context.get("channel_name", ""), 128),
                 upstream_url=_limit(context.get("upstream_url", ""), 1024),
                 latency_ms=_to_float(context.get("latency_ms", 0)),
+                first_token_ms=_to_float(context.get("first_token_ms", 0)),
+                is_stream=bool(context.get("is_stream", False)),
                 status_code=_to_int(context.get("status_code", 0)),
                 error_message=_limit(context.get("error_message", ""), 1000),
                 thinking_effort=_limit(context.get("thinking_effort", "none"), 16) or "none",

@@ -1,24 +1,68 @@
 <template>
-  <section class="rounded-xl border border-border bg-card text-card-foreground shadow-sm transition-shadow duration-200 hover:shadow-vercel-sm">
-    <header v-if="$slots.header || title" class="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
-      <div>
-        <h3 v-if="title" class="text-sm font-semibold tracking-tight">{{ title }}</h3>
+  <v-card class="ui-card" :class="{ 'ui-card-flush': !padded }">
+    <header v-if="$slots.header || title || $slots.extra" class="card-heading">
+      <div class="card-heading-title">
+        <component :is="icon" v-if="icon" :size="20" :stroke-width="1.5" aria-hidden="true" />
+        <h2 v-if="title" class="card-title">{{ title }}</h2>
         <slot name="header" />
       </div>
-      <slot name="extra" />
+      <div v-if="$slots.extra" class="card-heading-extra">
+        <slot name="extra" />
+      </div>
     </header>
-    <div :class="contentClass">
-      <slot />
-    </div>
-    <footer v-if="$slots.footer" class="border-t border-border px-5 py-4">
-      <slot name="footer" />
+    <div :class="{ 'panel-body': padded }"><slot /></div>
+    <footer v-if="$slots.footer" class="card-footer">
+      <v-divider class="my-2" />
+      <div class="panel-body"><slot name="footer" /></div>
     </footer>
-  </section>
+  </v-card>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import type { Component } from 'vue'
 
-const props = withDefaults(defineProps<{ title?: string; padded?: boolean }>(), { padded: true })
-const contentClass = computed(() => props.padded ? 'p-5' : '')
+withDefaults(defineProps<{ title?: string; padded?: boolean; icon?: Component }>(), {
+  padded: true,
+})
 </script>
+
+<style scoped>
+.ui-card {
+  min-width: 0;
+  height: auto;
+  box-sizing: border-box;
+  padding: 18px 20px;
+}
+.ui-card-flush {
+  padding: 0;
+  overflow: hidden;
+}
+.card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.card-heading-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.card-heading-extra {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+.card-heading + .panel-body,
+.card-heading + div:not(.panel-body) {
+  margin-top: 14px;
+}
+</style>

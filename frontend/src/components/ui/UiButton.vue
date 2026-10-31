@@ -1,50 +1,72 @@
 <template>
-  <button
+  <v-btn
+    :color="color"
+    :variant="btnVariant"
+    :size="btnSize"
+    :icon="size === 'icon' ? true : undefined"
+    :block="block"
+    :loading="loading"
+    :disabled="disabled || formBusy"
     :type="nativeType"
-    :disabled="disabled || loading"
-    :class="buttonClass"
+    class="ui-btn"
+    :class="{ 'ui-btn-icon': size === 'icon' }"
   >
-    <span v-if="loading" class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
     <slot />
-  </button>
+  </v-btn>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { cn } from '@/lib/utils'
+import { computed, inject } from 'vue'
+import { formBusyKey } from '@/composables/useField'
 
-const props = withDefaults(defineProps<{
-  variant?: 'default' | 'primary' | 'danger' | 'ghost' | 'link'
-  size?: 'sm' | 'md' | 'lg' | 'icon'
-  block?: boolean
-  loading?: boolean
-  disabled?: boolean
-  nativeType?: 'button' | 'submit' | 'reset'
-}>(), {
-  variant: 'default',
-  size: 'md',
-  nativeType: 'button',
+const formBusy = inject(
+  formBusyKey,
+  computed(() => false)
+)
+
+const props = withDefaults(
+  defineProps<{
+    variant?: 'default' | 'primary' | 'danger' | 'ghost' | 'link'
+    size?: 'sm' | 'md' | 'lg' | 'icon'
+    block?: boolean
+    loading?: boolean
+    disabled?: boolean
+    nativeType?: 'button' | 'submit' | 'reset'
+  }>(),
+  { variant: 'default', size: 'md', nativeType: 'button' }
+)
+
+const color = computed(() => {
+  if (props.variant === 'primary') return 'primary'
+  if (props.variant === 'danger') return 'error'
+  if (props.variant === 'link') return 'primary'
+  return undefined
 })
 
-const variants = {
-  default: 'border-border bg-background text-foreground hover:bg-accent',
-  primary: 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
-  danger: 'border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90',
-  ghost: 'border-transparent bg-transparent hover:bg-accent',
-  link: 'border-transparent bg-transparent px-0 text-foreground underline-offset-4 hover:underline',
-}
+const btnVariant = computed(() => {
+  if (props.variant === 'primary' || props.variant === 'danger') return 'flat'
+  if (props.variant === 'link') return 'text'
+  if (props.variant === 'ghost' || props.size === 'icon') return 'text'
+  return 'tonal'
+})
 
-const sizes = {
-  sm: 'h-8 px-3 text-xs',
-  md: 'h-9 px-4 text-sm',
-  lg: 'h-10 px-5 text-sm',
-  icon: 'h-9 w-9 p-0',
-}
-
-const buttonClass = computed(() => cn(
-  'inline-flex items-center justify-center gap-2 rounded-md border font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
-  variants[props.variant],
-  sizes[props.size],
-  props.block && 'w-full',
-))
+const btnSize = computed(() => {
+  if (props.size === 'sm') return 'small'
+  if (props.size === 'lg') return 'large'
+  if (props.size === 'icon') return 'small'
+  return 'default'
+})
 </script>
+
+<style scoped>
+.ui-btn {
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-weight: 600;
+}
+.ui-btn-icon {
+  min-width: 38px;
+  width: 38px;
+  height: 38px;
+}
+</style>

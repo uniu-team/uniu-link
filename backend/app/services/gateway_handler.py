@@ -365,6 +365,8 @@ def _request_log_context(
     output_content: str = "",
     from_apikey: str = "",
     from_apikey_name: str = "",
+    is_stream: bool = False,
+    first_token_ms: float = 0.0,
 ) -> dict[str, Any]:
     return {
         "trace_id": trace_id,
@@ -377,6 +379,8 @@ def _request_log_context(
         "channel_name": channel_name,
         "upstream_url": upstream_url,
         "latency_ms": (time.time() - start_time) * 1000,
+        "first_token_ms": first_token_ms,
+        "is_stream": is_stream,
         "status_code": status_code,
         "error_message": error_message,
         "thinking_effort": thinking_effort or "none",
@@ -559,6 +563,7 @@ async def handle_gateway_request(
             thinking_effort=thinking_effort,
             request_body=_serialize_body_for_log(request_body),
             input_content=_extract_input_content(request_body),
+            is_stream=True,
             **api_key_log_context,
         )
         return StreamingResponse(
@@ -827,6 +832,8 @@ async def stream_gateway_request(
     output_text = ""
     status_code = 499
     error_message = "Client disconnected before the stream completed"
+    first_token_ms = 0.0
+    log_context["is_stream"] = True
     try:
         request_body = await plugin_engine.execute_hook(
             "pre_route", request_body=request_body, api_type=api_type,
@@ -942,6 +949,8 @@ async def stream_gateway_request(
                                 if pending_out:
                                     if settings.log_content and len(output_text) < _MAX_LOG_TEXT_LENGTH:
                                         output_text += _extract_stream_output_text("".join(pending_out))[:_MAX_LOG_TEXT_LENGTH - len(output_text)]
+                                    if first_token_ms == 0.0:
+                                        first_token_ms = (time.time() - start_time) * 1000
                                     # Set before yielding: generator close/cancellation can
                                     # occur while suspended at this exact yield.
                                     data_sent = True
@@ -992,6 +1001,7 @@ async def stream_gateway_request(
             _finish_request_log(
                 log_context, start_time, status_code=status_code, error_message=error_message,
                 output_content=output_text, response_body=_serialize_body_for_log("<streaming>"),
+                first_token_ms=first_token_ms, is_stream=True,
                 **total_usage,
             )
             await _safe_increment_token_usage(api_key_id, total_usage["total_tokens"], trace_id)

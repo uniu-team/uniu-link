@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, DateTime, Text, func
+from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
@@ -21,6 +21,8 @@ class RequestLog(Base):
     selected_channel_name: Mapped[str] = mapped_column(String(128), default="")
     upstream_url: Mapped[str] = mapped_column(String(1024), default="")
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    first_token_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    is_stream: Mapped[bool] = mapped_column(Boolean, default=False)
     status_code: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str] = mapped_column(Text, default="")
     thinking_effort: Mapped[str] = mapped_column(String(16), default="none")
