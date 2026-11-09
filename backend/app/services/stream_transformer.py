@@ -42,6 +42,10 @@ def sse_payload(frame: str) -> dict[str, Any] | None:
         raise StreamProtocolError("Invalid JSON in upstream SSE event") from exc
     if not isinstance(payload, dict):
         raise StreamProtocolError("Upstream SSE data must be a JSON object")
+    if "Payload" in payload and isinstance(payload["Payload"], dict):
+        payload = payload["Payload"]
+    elif "payload" in payload and isinstance(payload["payload"], dict) and "type" not in payload:
+        payload = payload["payload"]
     return payload
 
 
@@ -219,13 +223,11 @@ class StreamState:
     def _mark_output(self, kind: str) -> None:
         """Record that the turn produced something the caller can act on.
 
-        Claude thinking counts, because it is a first-class content block there.
-        Chat and Responses reasoning does not: their visible text field stays
-        empty, which is exactly what makes a reasoning-only turn read as "no
-        content" on those clients.
+        Thinking/reasoning, tools, and text are all treated as visible output across
+        all client protocols so that reasoning frames stream immediately without
+        artificial holdback delay.
         """
-        if kind != "thinking" or self.target == "claude":
-            self.visible_output_seen = True
+        self.visible_output_seen = True
 
     def _append(self, block: dict[str, Any], text: str) -> None:
         if not text:
@@ -353,6 +355,8 @@ class StreamState:
                     self.reason = choice["finish_reason"]
                 if delta.get("content"):
                     self._mark_output("text")
+                if delta.get("reasoning_content") or delta.get("reasoning"):
+                    self._mark_output("thinking")
                 for tool in delta.get("tool_calls") or []:
                     fn = tool.get("function") or {}
                     if tool.get("id") or fn.get("name"):
@@ -382,6 +386,9 @@ class StreamState:
         if event_type == "response.output_text.delta":
             if payload.get("delta"):
                 self._mark_output("text")
+        elif event_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
+            if payload.get("delta"):
+                self._mark_output("thinking")
         elif event_type == "response.function_call_arguments.delta":
             self._mark_output("tool")
         elif event_type in ("response.content_part.added", "response.content_part.done"):
@@ -392,6 +399,8 @@ class StreamState:
             item_type = item.get("type")
             if item_type == "function_call":
                 self._mark_output("tool")
+            elif item_type == "reasoning":
+                self._mark_output("thinking")
             elif item_type == "message":
                 for part in item.get("content") or []:
                     if isinstance(part, dict) and part.get("text"):
@@ -401,8 +410,7 @@ class StreamState:
             # An upstream may stream no deltas and deliver the whole output
             # only on the terminal event, which then passes through verbatim;
             # those items are content the client can still read, so scan them
-            # like ``output_item.done``. Reasoning items stay excluded,
-            # keeping the reasoning-only rejection intact.
+            # like ``output_item.done``.
             response = payload.get("response")
             if isinstance(response, dict):
                 for item in response.get("output") or []:
@@ -410,6 +418,8 @@ class StreamState:
                         continue
                     if item.get("type") == "function_call":
                         self._mark_output("tool")
+                    elif item.get("type") == "reasoning":
+                        self._mark_output("thinking")
                     elif item.get("type") == "message":
                         for part in item.get("content") or []:
                             if isinstance(part, dict) and part.get("text"):

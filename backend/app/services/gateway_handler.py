@@ -893,24 +893,39 @@ async def stream_gateway_request(
                             holdback: list[str] = []
                             holdback_bytes = 0
                             released = False
-                            deadline = time.monotonic() + _STREAM_HOLDBACK_SECONDS
+                            first_token_timeout = getattr(settings, "first_token_timeout", _STREAM_HOLDBACK_SECONDS)
+                            stream_keepalive_interval = getattr(settings, "stream_keepalive_interval", 0)
+                            deadline = time.monotonic() + first_token_timeout
+                            last_send_time = time.monotonic()
                             events = iter_sse_events(resp, url, trace_id, channel.name).__aiter__()
                             reader = asyncio.ensure_future(events.__anext__())
                             while True:
                                 flush_only = False
+                                now = time.monotonic()
+                                wait_timeout = None
                                 if not released:
-                                    remaining = deadline - time.monotonic()
-                                    ready: Any = ()
-                                    if remaining > 0:
-                                        # asyncio.wait leaves a pending read untouched,
-                                        # so an expiring hold-back cannot cancel the
-                                        # upstream stream the way wait_for would.
-                                        ready, _ = await asyncio.wait({reader}, timeout=remaining)
+                                    wait_timeout = max(0.0, deadline - now)
+                                if stream_keepalive_interval > 0 and data_sent:
+                                    rem_keepalive = max(0.0, (last_send_time + stream_keepalive_interval) - now)
+                                    if wait_timeout is None or rem_keepalive < wait_timeout:
+                                        wait_timeout = rem_keepalive
+
+                                if wait_timeout is not None:
+                                    if wait_timeout > 0:
+                                        ready, _ = await asyncio.wait({reader}, timeout=wait_timeout)
+                                    else:
+                                        ready = set()
                                     if not ready:
-                                        # Hold expired: give up the failover option rather
-                                        # than leave a slow model with no bytes sent.
-                                        released = True
-                                        flush_only = True
+                                        now_after_wait = time.monotonic()
+                                        if not released and now_after_wait >= deadline:
+                                            # Hold expired: give up the failover option rather
+                                            # than leave a slow model with no bytes sent.
+                                            released = True
+                                            flush_only = True
+                                        elif stream_keepalive_interval > 0 and data_sent and (now_after_wait - last_send_time) >= stream_keepalive_interval:
+                                            yield ": keepalive\n\n"
+                                            last_send_time = time.monotonic()
+                                            continue
                                 elif not reader.done():
                                     await asyncio.wait({reader})
 
@@ -934,13 +949,7 @@ async def stream_gateway_request(
                                         if converted:
                                             holdback.append(converted)
                                             holdback_bytes += len(converted)
-                                        # Release on usable output, on terminal, or on the deadline.
-                                        # Reasoning alone must NOT release: a reasoning-then-stop
-                                        # turn is the silent refusal this hold-back exists to catch,
-                                        # and committing its frames early is what makes failover
-                                        # impossible. Checking ``state.finished`` outside the
-                                        # ``converted`` branch keeps buffered frames from being
-                                        # dropped when a terminal yields no bytes of its own.
+                                        # Release on usable output (thinking, tools, text), on terminal, or on the deadline.
                                         if (released or state.visible_output_seen or state.finished
                                                 or holdback_bytes >= _STREAM_HOLDBACK_MAX_BYTES):
                                             pending_out = holdback
@@ -954,6 +963,7 @@ async def stream_gateway_request(
                                     # Set before yielding: generator close/cancellation can
                                     # occur while suspended at this exact yield.
                                     data_sent = True
+                                    last_send_time = time.monotonic()
                                     for chunk in pending_out:
                                         yield chunk
                                 if state.finished:

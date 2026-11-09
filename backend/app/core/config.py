@@ -33,6 +33,8 @@ CONFIG_META: dict[str, tuple[type, Any, bool, str]] = {
     "default_channel_timeout": (int, 30, True, "默认渠道超时(秒)"),
     "default_max_retries": (int, 2, True, "默认最大重试次数"),
     "health_check_interval": (int, 30, True, "健康检查间隔(秒)"),
+    "first_token_timeout": (int, 15, True, "首字容灾超时(秒)"),
+    "stream_keepalive_interval": (int, 15, True, "流式保活心跳间隔(秒，0为禁用)"),
     "circuit_breaker_failure_threshold": (int, 5, True, "熔断失败阈值"),
     "circuit_breaker_cooldown_seconds": (int, 60, True, "熔断冷却时间(秒)"),
     "circuit_breaker_half_open_max_requests": (int, 3, True, "熔断半开最大请求数"),
@@ -57,7 +59,8 @@ YAML_SECTION_MAP: dict[str, list[str]] = {
             "admin_api_key", "admin_hmac_ttl_seconds"],
     "database": ["postgres_host", "postgres_port", "postgres_db", "postgres_user", "postgres_password"],
     "redis": ["redis_url"],
-    "gateway": ["default_channel_timeout", "default_max_retries", "health_check_interval"],
+    "gateway": ["default_channel_timeout", "default_max_retries", "health_check_interval",
+                "first_token_timeout", "stream_keepalive_interval"],
     "circuit_breaker": ["circuit_breaker_failure_threshold", "circuit_breaker_cooldown_seconds",
                         "circuit_breaker_half_open_max_requests"],
     "rate_limit": ["rate_limit_global_rps", "rate_limit_per_key_rps", "rate_limit_per_model_rps"],
@@ -80,6 +83,12 @@ YAML_KEY_ALIASES: dict[str, dict[str, str]] = {
     },
     "redis": {
         "url": "redis_url",
+    },
+    "gateway": {
+        "channel_timeout": "default_channel_timeout",
+        "max_retries": "default_max_retries",
+        "first_token_timeout": "first_token_timeout",
+        "stream_keepalive_interval": "stream_keepalive_interval",
     },
     "circuit_breaker": {
         "failure_threshold": "circuit_breaker_failure_threshold",
@@ -123,6 +132,8 @@ class Settings(BaseModel):
     default_channel_timeout: int = 30
     default_max_retries: int = 2
     health_check_interval: int = 30
+    first_token_timeout: int = 15
+    stream_keepalive_interval: int = 15
     circuit_breaker_failure_threshold: int = 5
     circuit_breaker_cooldown_seconds: int = 60
     circuit_breaker_half_open_max_requests: int = 3

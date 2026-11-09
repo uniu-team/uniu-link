@@ -408,14 +408,14 @@ class EmptyTerminalTests(unittest.TestCase):
         with self.assertRaises(StreamProtocolError):
             self.feed_all(state, frames + ["data: [DONE]\n\n"])
 
-    def test_reasoning_only_turn_is_rejected_for_responses(self):
+    def test_reasoning_only_turn_stays_valid_for_responses(self):
+        # Reasoning/thinking is first-class output and does not get rejected
         state = StreamState("openai", "responses")
         frames = [chat({"reasoning_content": "想过但没说"}),
                   chat(finish="stop"), "data: [DONE]\n\n"]
-        with self.assertRaises(StreamProtocolError) as caught:
-            self.feed_all(state, frames)
-        self.assertEqual(caught.exception.status_code, 502)
-        self.assertFalse(state.finished)
+        wire = self.feed_all(state, frames)
+        self.assertTrue(state.finished)
+        self.assertIn("想过但没说", wire)
 
     def test_reasoning_only_turn_stays_valid_for_claude(self):
         # Claude thinking is a first-class content block, so a thinking-only
@@ -499,19 +499,17 @@ class EmptyTerminalTests(unittest.TestCase):
         self.assertTrue(state.finished)
         self.assertIn("整段正文", wire)
 
-    def test_completed_with_embedded_reasoning_only_is_rejected(self):
-        # Embedded reasoning items do not count on the Responses target: the
-        # reasoning-only rejection must survive the embedded-output fix.
+    def test_completed_with_embedded_reasoning_only_is_kept(self):
+        # Embedded reasoning items count as valid output
         frames = [sse({"type": "response.created", "response": {"id": "r", "model": "upstream"}}),
                   sse({"type": "response.completed", "response": {
                       "id": "r", "status": "completed",
                       "output": [{"id": "rs", "type": "reasoning", "status": "completed",
                                   "summary": [{"type": "summary_text", "text": "只思考"}]}]}})]
         state = StreamState("responses", "responses")
-        with self.assertRaises(StreamProtocolError) as caught:
-            self.feed_all(state, frames)
-        self.assertEqual(caught.exception.status_code, 502)
-        self.assertFalse(state.finished)
+        wire = self.feed_all(state, frames)
+        self.assertTrue(state.finished)
+        self.assertIn("只思考", wire)
 
     def test_completed_with_embedded_tool_call_is_kept(self):
         frames = [sse({"type": "response.created", "response": {"id": "r", "model": "upstream"}}),
